@@ -1,0 +1,23 @@
+# Data Handling & Scientific Computing
+pandas
+numpy
+scikit-learn
+openpyxl
+
+# Machine Learning & NLP
+torch
+transformers
+datasets
+konlpy
+
+# Web Scraping & API Interaction
+requests
+beautifulsoup4
+
+# Document & File Handling
+python-docx
+olefile
+pycryptodome
+
+# Windows-specific Automation (for .doc parsing)
+pywin32
