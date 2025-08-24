@@ -1,5 +1,5 @@
 import pandas as pd
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score, fbeta_score
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, fbeta_score, balanced_accuracy_score
 from torch.amp import autocast, GradScaler
 from sklearn.model_selection import StratifiedKFold
 import json
@@ -26,13 +26,13 @@ class ComprehensiveModelPreprocessingExperiment:
 
         # Define models to test
         self.models = {
-            # 'KR-SBERT': 'snunlp/KR-SBERT-V40K-klueNLI-augSTS',
-            # 'Ko-SRoBERTa': 'jhgan/ko-sroberta-multitask',
-            # 'KoSimCSE': 'BM-K/KoSimCSE-roberta-multitask',
-            # 'DistilUSE': 'sentence-transformers/distiluse-base-multilingual-cased-v2',
-            # 'MiniLM': 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
-            'Qwen': 'Qwen/Qwen3-Embedding-0.6B'
-            # 'BGE-M3': 'BAAI/bge-m3'
+            'KR-SBERT': 'snunlp/KR-SBERT-V40K-klueNLI-augSTS',
+            'Ko-SRoBERTa': 'jhgan/ko-sroberta-multitask',
+            'KoSimCSE': 'BM-K/KoSimCSE-roberta-multitask',
+            'DistilUSE': 'sentence-transformers/distiluse-base-multilingual-cased-v2',
+            'MiniLM': 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+            'Qwen': 'Qwen/Qwen3-Embedding-0.6B',
+            'BGE-M3': 'BAAI/bge-m3'
         }
 
         # Define preprocessing strategies
@@ -223,7 +223,8 @@ class ComprehensiveModelPreprocessingExperiment:
                         layer_results = self._train_and_evaluate_with_layers(data, strategy, layer, k_folds=3)
                         strategy_results[f'layer_{layer}'] = layer_results
                         best_f1 = layer_results['avg_results']['f1']
-                        print(f"   F1: {best_f1:.3f}")
+                        balanced_acc = layer_results['avg_results']['balanced_accuracy']
+                        print(f"   F1: {best_f1:.3f}, Balanced Accuracy: {balanced_acc:.3f}")
                     all_results[strategy] = strategy_results
                 optimal_configs = self._find_optimal_configurations(all_results)
                 return all_results, optimal_configs
@@ -239,7 +240,7 @@ class ComprehensiveModelPreprocessingExperiment:
                     fold_result = self._train_fold(train_data, test_data, additional_layers)
                     fold_results.append(fold_result)
                 avg_results = {}
-                metrics = ['accuracy', 'precision', 'recall', 'f1', 'f2', 'auc']
+                metrics = ['accuracy', 'balanced_accuracy', 'precision', 'recall', 'f1', 'f2']
                 for metric in metrics:
                     values = [fold[metric] for fold in fold_results]
                     avg_results[metric] = np.mean(values)
@@ -282,7 +283,7 @@ class ComprehensiveModelPreprocessingExperiment:
                     model.to(self.device)
                 except Exception as e:
                     print(f"Model initialization failed: {e}")
-                    return {'accuracy': 0.5, 'precision': 0.5, 'recall': 0.5, 'f1': 0.5, 'f2': 0.5, 'auc': 0.5}
+                    return {'accuracy': 0.5, 'balanced_accuracy': 0.5, 'precision': 0.5, 'recall': 0.5, 'f1': 0.5, 'f2': 0.5}
 
                 if 'qwen' in self.model_name.lower():
                     learning_rate = 1e-6
@@ -340,7 +341,7 @@ class ComprehensiveModelPreprocessingExperiment:
                     print(f"Epoch {epoch + 1} completed, Average Loss: {avg_train_loss:.4f}")
 
                 model.eval()
-                predictions, true_labels, probabilities = [], [], []
+                predictions, true_labels = [], []
                 with torch.no_grad():
                     for batch in test_loader:
                         try:
@@ -348,11 +349,9 @@ class ComprehensiveModelPreprocessingExperiment:
                                 'attention_mask'].to(self.device), batch['labels'].to(self.device)
                             outputs = model(input_ids, attention_mask=attention_mask)
                             logits = outputs['logits']
-                            probs = torch.softmax(logits, dim=1)
                             preds = torch.argmax(logits, dim=1)
                             predictions.extend(preds.cpu().numpy())
                             true_labels.extend(labels.cpu().numpy())
-                            probabilities.extend(probs[:, 1].cpu().numpy())
                         except RuntimeError as e:
                             if "out of memory" in str(e):
                                 print("GPU OOM in evaluation, skipping batch"); torch.cuda.empty_cache(); continue
@@ -362,19 +361,19 @@ class ComprehensiveModelPreprocessingExperiment:
                 torch.cuda.empty_cache()
 
                 if not predictions or not true_labels:
-                    return {'accuracy': 0.5, 'precision': 0.5, 'recall': 0.5, 'f1': 0.5, 'f2': 0.5, 'auc': 0.5}
+                    return {'accuracy': 0.5, 'balanced_accuracy': 0.5, 'precision': 0.5, 'recall': 0.5, 'f1': 0.5, 'f2': 0.5}
 
                 try:
                     accuracy = accuracy_score(true_labels, predictions)
+                    balanced_acc = balanced_accuracy_score(true_labels, predictions)
                     precision, recall, f1, _ = precision_recall_fscore_support(true_labels, predictions,
                                                                                average='binary', zero_division=0)
                     f2 = fbeta_score(true_labels, predictions, beta=2, average='binary', zero_division=0)
-                    auc = roc_auc_score(true_labels, probabilities) if len(set(true_labels)) > 1 else 0.5
                 except Exception as e:
                     print(f"Metric calculation failed: {e}")
-                    return {'accuracy': 0.5, 'precision': 0.5, 'recall': 0.5, 'f1': 0.5, 'f2': 0.5, 'auc': 0.5}
+                    return {'accuracy': 0.5, 'balanced_accuracy': 0.5, 'precision': 0.5, 'recall': 0.5, 'f1': 0.5, 'f2': 0.5}
 
-                return {'accuracy': accuracy, 'precision': precision, 'recall': recall, 'f1': f1, 'f2': f2, 'auc': auc}
+                return {'accuracy': accuracy, 'balanced_accuracy': balanced_acc, 'precision': precision, 'recall': recall, 'f1': f1, 'f2': f2}
 
             def _find_optimal_configurations(self, all_results):
                 strategies = ['full_text', 'noun_verb_only', 'noun_verb_adj']
@@ -386,8 +385,7 @@ class ComprehensiveModelPreprocessingExperiment:
                             layer_key = f'layer_{layer}'
                             if layer_key in all_results[strategy]:
                                 results = all_results[strategy][layer_key]['avg_results']
-                                weighted_score = (0.3 * results['f1'] + 0.4 * results['f2'] + 0.2 * results[
-                                    'accuracy'] + 0.1 * results['precision'])
+                                weighted_score = (0.25 * results['f1'] + 0.35 * results['f2'] + 0.15 * results['accuracy'] + 0.15 * results['balanced_accuracy'] + 0.1 * results['precision'])
                                 if results['f1'] > best_configs['f1']['score']: best_configs['f1'] = {
                                     'strategy': strategy, 'layer': layer, 'score': results['f1']}
                                 if results['f2'] > best_configs['f2']['score']: best_configs['f2'] = {
@@ -417,7 +415,7 @@ class ComprehensiveModelPreprocessingExperiment:
         if 'weighted' in analysis and analysis['weighted'].get('strategy'):
             best = analysis['weighted']
             print(
-                f"   Best Config: {best['strategy']} + Layer {best['layer']} -> F1: {best['f1']:.3f} | F2: {best['f2']:.3f} | Recall: {best['recall']:.3f}")
+                f"   Best Config: {best['strategy']} + Layer {best['layer']} -> F1: {best['f1']:.3f} | F2: {best['f2']:.3f} | Recall: {best['recall']:.3f} | Balanced Accuracy: {best['balanced_accuracy']:.3f}")
 
     def _analyze_across_models(self, all_results):
         print(f"\n{'=' * 20} CROSS-MODEL ANALYSIS {'=' * 20}")
